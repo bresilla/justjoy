@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(justjoy VERSION 0.1.1 LANGUAGES CXX)
+project(justjoy VERSION 0.0.1 LANGUAGES CXX)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
@@ -43,6 +43,7 @@ include_directories(include)
 
 set(exe
   src/client.cpp
+  src/server.cpp
 )
 
 set(lib
