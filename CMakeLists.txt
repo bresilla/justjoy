@@ -26,6 +26,14 @@ pkg_search_module(LIBEVDEV REQUIRED libevdev)
 FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz)
 FetchContent_MakeAvailable(json)
 
+FetchContent_Declare(
+    cli11
+    QUIET
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG v2.5.0
+)
+FetchContent_MakeAvailable(cli11)
+
 
 install(
     DIRECTORY include/
@@ -43,6 +51,7 @@ set(lib
 set(dependencies
     ${LIBEVDEV_LIBRARIES}
     nlohmann_json::nlohmann_json
+    CLI11::CLI11
 )
 
 set(exec_names)
