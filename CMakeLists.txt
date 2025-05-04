@@ -18,13 +18,9 @@ set(params
     -Wno-reorder
     -Wno-strict-aliasing
     -Wno-unused-but-set-variable
+    -Wno-missing-field-initializers
+    -Wno-stringop-truncation
 )
-
-find_package(PkgConfig REQUIRED)
-pkg_search_module(LIBEVDEV REQUIRED libevdev)
-
-FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz)
-FetchContent_MakeAvailable(json)
 
 FetchContent_Declare(
     cli11
@@ -42,16 +38,14 @@ install(
 include_directories(include)
 
 set(exe
-  src/client.cpp
-  src/server.cpp
+  src/netstick.cpp
+  src/netstickd.cpp
 )
 
 set(lib
 )
 
 set(dependencies
-    ${LIBEVDEV_LIBRARIES}
-    nlohmann_json::nlohmann_json
     CLI11::CLI11
 )
 
