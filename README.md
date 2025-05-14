@@ -7,6 +7,13 @@ warpout
 simple udev input device forwarder to remote machine
 
 
+
+this is a simple UDP-based input device forwarder that can be used to
+forward input events from one machine to another.  It is heavily basd on
+[netstick](https://github.com/funkenstein/netstick), but uses morern C++
+and used CLI11 for argument parsing.
+
+
 ## Building
 
 ```
