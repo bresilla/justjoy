@@ -17,10 +17,10 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 
-#include "joystick.h"
-#include "server.h"
-#include "slip.h"
-#include "tlvc.h"
+#include "warpout/joystick.h"
+#include "warpout/server.h"
+#include "warpout/slip.h"
+#include "warpout/tlvc.h"
 
 //---------------------------------------------------------------------------
 // SERVER CODE

@@ -18,9 +18,9 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 
-#include "joystick.h"
-#include "slip.h"
-#include "tlvc.h"
+#include "warpout/joystick.h"
+#include "warpout/slip.h"
+#include "warpout/tlvc.h"
 
 //---------------------------------------------------------------------------
 typedef struct __attribute__((packed)) {
