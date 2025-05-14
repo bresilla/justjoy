@@ -29,11 +29,11 @@ make
 ### Server
 
 ```bash
-warpout server 12398
+warpout server --port 12398 --bind 172.30.0.175
 ```
 
 ### Client
 
 ```bash
-warpout client -d /dev/input/event-xbox -a 172.30.0.175 -p 12398
+warpout client --device /dev/input/event-xbox --address 172.30.0.175 --port 12398
 ```
