@@ -1,6 +1,3 @@
-// Netstick - Copyright (c) 2021 Funkenstein Software Consulting.
-// See LICENSE.txt for more details.
-
 #include "warpout/tlvc.h"
 
 #include <cstddef>

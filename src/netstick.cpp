@@ -1,5 +1,3 @@
-// Netstick - Copyright (c) 2021 Funkenstein Software Consulting.  See LICENSE.txt
-// for more details.
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>

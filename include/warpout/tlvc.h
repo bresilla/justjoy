@@ -1,10 +1,8 @@
-// Netstick - Copyright (c) 2021 Funkenstein Software Consulting.  See LICENSE.txt
-// for more details.
 #pragma once
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -29,8 +27,8 @@ typedef struct __attribute__((packed)) {
 typedef struct {
     tlvc_header_t header;
     tlvc_footer_t footer;
-    void*         data;
-    size_t        dataLen;
+    void *data;
+    size_t dataLen;
 } tlvc_data_t;
 
 //---------------------------------------------------------------------------
@@ -43,7 +41,7 @@ typedef struct {
  * @param dataLen_ length of the payload data in bytes
  * @param data_ payload data to encode
  */
-void tlvc_encode_data(tlvc_data_t* tlvc_, uint16_t tag_, size_t dataLen_, void* data_);
+void tlvc_encode_data(tlvc_data_t *tlvc_, uint16_t tag_, size_t dataLen_, void *data_);
 
 //---------------------------------------------------------------------------
 /**
@@ -53,7 +51,7 @@ void tlvc_encode_data(tlvc_data_t* tlvc_, uint16_t tag_, size_t dataLen_, void* 
  * @param dataLen_ size of the data_ blob in bytes
  * @return true if the data stream was successfully decoded from the source data
  */
-bool tlvc_decode_data(tlvc_data_t* tlvc_, void* data_, size_t dataLen_);
+bool tlvc_decode_data(tlvc_data_t *tlvc_, void *data_, size_t dataLen_);
 
 #if defined(__cplusplus)
 } // extern "C"
