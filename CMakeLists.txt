@@ -38,8 +38,7 @@ install(
 include_directories(include)
 
 set(exe
-  src/netstick.cpp
-  src/netstickd.cpp
+  src/warpout.cpp
 )
 
 set(lib
