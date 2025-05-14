@@ -1,4 +1,4 @@
-#include "warpout/server.h"
+#include "warpout/server.hpp"
 
 #include <errno.h>
 #include <fcntl.h>

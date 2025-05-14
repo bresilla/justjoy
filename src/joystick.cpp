@@ -1,4 +1,4 @@
-#include "warpout/joystick.h"
+#include "warpout/joystick.hpp"
 
 #include <stdbool.h>
 #include <stddef.h>

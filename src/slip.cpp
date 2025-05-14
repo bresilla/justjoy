@@ -1,4 +1,4 @@
-#include "warpout/slip.h"
+#include "warpout/slip.hpp"
 
 #include <stdbool.h>
 #include <stddef.h>
