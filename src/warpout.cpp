@@ -332,9 +332,16 @@ static bool on_read(int fd, void *vc) {
     return rd != 0 || (rd < 0 && (errno == EINTR || errno == EAGAIN));
 }
 
-static void run_server(uint16_t port) {
+//---------------------------------------------------------------------------
+// Modified run_server to take a bind address
+
+static void run_server(const std::string &bind_addr, uint16_t port) {
     client_handlers_t handlers = {.onConnect = on_connect, .onDisconnect = on_disconnect, .onReadData = on_read};
-    auto *srv = server_create(port, 10, &handlers);
+    auto *srv = server_create(bind_addr.c_str(), port, 10, &handlers);
+    if (!srv) {
+        std::fprintf(stderr, "Failed to create server on %s:%u\n", bind_addr.c_str(), port);
+        std::exit(1);
+    }
     server_run(srv);
 }
 
@@ -342,12 +349,16 @@ static void run_server(uint16_t port) {
 // main()
 
 int main(int argc, char **argv) {
-    CLI::App app{"warpout — joystick proxy (client or server)"};
+    CLI::App app{"warpout — joystick/uinput proxy (client or server)"};
 
+    // Server subcommand
     auto srv = app.add_subcommand("server", "Run as server");
+    std::string bind_addr;
     uint16_t sPort;
-    srv->add_option("port", sPort, "Listen port")->required();
+    srv->add_option("-b,--bind", bind_addr, "Bind address/interface")->default_val("0.0.0.0");
+    srv->add_option("-p,--port", sPort, "Listen port")->required();
 
+    // Client subcommand
     auto cli = app.add_subcommand("client", "Run as client");
     std::string dev, addr;
     uint16_t cPort;
@@ -358,7 +369,7 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     if (srv->parsed()) {
-        run_server(sPort);
+        run_server(bind_addr, sPort);
     } else if (cli->parsed()) {
         while (true) {
             run_client(dev, addr, cPort);

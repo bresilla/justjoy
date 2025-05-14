@@ -1,200 +1,196 @@
 #include "warpout/server.hpp"
 
+#include <arpa/inet.h> // inet_pton
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/socket.h> // SO_BINDTODEVICE
+#include <net/if.h>       // struct ifreq
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-
-#include <linux/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 //---------------------------------------------------------------------------
-server_context_t *server_create(uint16_t port_, int maxClients_, client_handlers_t *clientHandlers_) {
-    int rc = socket(AF_INET, SOCK_STREAM, 0);
-    if (rc < 0) {
-        printf("error creating socket: %d (%s)\n", errno, strerror(errno));
+// Create + bind listening socket, set reuse, optional SO_BINDTODEVICE
+//---------------------------------------------------------------------------
+
+server_context_t *server_create(const char *bind_addr_, uint16_t port_, int maxClients_,
+                                client_handlers_t *clientHandlers_) {
+    // 1) socket()
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        fprintf(stderr, "socket() error: %s\n", strerror(errno));
         return NULL;
     }
-
-    int fd = rc;
-    int enable = 1;
-    rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &enable, sizeof(enable));
-    if (rc != 0) {
-        printf("error setting socket option: %d (%s)\n", errno, strerror(errno));
+    // 2) SO_REUSEADDR + SO_REUSEPORT
+    int yes = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(yes)) < 0) {
+        fprintf(stderr, "setsockopt(REUSE): %s\n", strerror(errno));
         close(fd);
         return NULL;
     }
 
+    // 3) Prepare sockaddr_in
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    // 3a) Try IPv4 literal
+    if (inet_pton(AF_INET, bind_addr_, &addr.sin_addr) == 1) {
+        // OK, bind to that IP
+    } else {
+        // Not an IP; treat as interface name
+        if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, bind_addr_, (socklen_t)strlen(bind_addr_)) < 0) {
+            fprintf(stderr, "warning: SO_BINDTODEVICE(%s) failed: %s\n", bind_addr_, strerror(errno));
+            // we'll still bind to INADDR_ANY below
+        }
+        addr.sin_addr.s_addr = INADDR_ANY;
+    }
     addr.sin_port = htons(port_);
 
-    rc = bind(fd, (const struct sockaddr *)&addr, sizeof(addr));
-    if (rc < 0) {
-        printf("error binding socket: %d (%s)\n", errno, strerror(errno));
+    // 4) bind()
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fprintf(stderr, "bind(%s:%u) error: %s\n", bind_addr_, port_, strerror(errno));
         close(fd);
         return NULL;
     }
 
-    rc = listen(fd, 4);
-    if (rc < 0) {
-        printf("error listening on socket: %d (%s)\n", errno, strerror(errno));
+    // 5) listen() using maxClients_ as backlog
+    if (listen(fd, maxClients_) < 0) {
+        fprintf(stderr, "listen() error: %s\n", strerror(errno));
         close(fd);
         return NULL;
     }
 
-    // create a context object and return it
-    server_context_t *context = (server_context_t *)(calloc(1, sizeof(server_context_t)));
-    context->port = port_;
-    context->serverFd = fd;
-    context->maxClients = maxClients_;
-    context->handlers = *clientHandlers_;
-    context->clientContext = (client_context_t **)(calloc(1, sizeof(client_context_t *) * maxClients_));
-
-    for (int i = 0; i < maxClients_; i++) {
-        context->clientContext[i] = (client_context_t *)(calloc(1, sizeof(client_context_t)));
-        context->clientContext[i]->inUse = false;
-        context->clientContext[i]->clientFd = -1;
-        context->clientContext[i]->contextData = NULL;
+    // 6) allocate context + per-client slots
+    server_context_t *ctx = (server_context_t *)calloc(1, sizeof(*ctx));
+    ctx->port = port_;
+    ctx->serverFd = fd;
+    ctx->maxClients = maxClients_;
+    ctx->handlers = *clientHandlers_;
+    ctx->clientContext = (client_context_t **)calloc(maxClients_, sizeof(*ctx->clientContext));
+    for (int i = 0; i < maxClients_; ++i) {
+        ctx->clientContext[i] = (client_context_t *)calloc(1, sizeof(**ctx->clientContext));
+        ctx->clientContext[i]->inUse = false;
+        ctx->clientContext[i]->clientFd = -1;
+        ctx->clientContext[i]->contextData = NULL;
     }
-    return context;
+    return ctx;
 }
 
 //---------------------------------------------------------------------------
-static void server_register_client_fd(int ePollFd_, int clientFd_) {
+// Epoll helper
+//---------------------------------------------------------------------------
+
+static void epoll_add(int efd, int fd) {
     struct epoll_event ev = {};
     ev.events = EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP | EPOLLET;
-    ev.data.fd = clientFd_;
-    if (epoll_ctl(ePollFd_, EPOLL_CTL_ADD, clientFd_, &ev) < 0) {
-        printf("error registering client fd=%d: %d (%s)\n", clientFd_, errno, strerror(errno));
-        exit(-1);
+    ev.data.fd = fd;
+    if (epoll_ctl(efd, EPOLL_CTL_ADD, fd, &ev) < 0) {
+        fprintf(stderr, "epoll_ctl ADD %d: %s\n", fd, strerror(errno));
+        exit(1);
+    }
+}
+
+static void epoll_del(int efd, int fd) {
+    if (epoll_ctl(efd, EPOLL_CTL_DEL, fd, NULL) < 0) {
+        fprintf(stderr, "epoll_ctl DEL %d: %s\n", fd, strerror(errno));
+        exit(1);
     }
 }
 
 //---------------------------------------------------------------------------
-static void server_deregister_client_fd(int ePollFd_, int clientFd_) {
-    if (epoll_ctl(ePollFd_, EPOLL_CTL_DEL, clientFd_, NULL) < 0) {
-        printf("error deregistering client fd=%d: %d (%s)\n", clientFd_, errno, strerror(errno));
-        exit(-1);
-    }
-}
-
+// On new client connect
 //---------------------------------------------------------------------------
-static void server_on_client_connect(server_context_t *context_, int ePollFd_, int clientFd_) {
-    bool noRoom = true;
-    for (int i = 0; i < context_->maxClients; i++) {
-        if (!context_->clientContext[i]->inUse) {
-            noRoom = false;
-            context_->clientContext[i]->inUse = true;
-            context_->clientContext[i]->clientFd = clientFd_;
-            context_->clientContext[i]->contextData = context_->handlers.onConnect(clientFd_);
 
-            // Make non-blocking.
-            int flags = fcntl(clientFd_, F_GETFL);
-            flags |= O_NONBLOCK;
-            fcntl(clientFd_, F_SETFL, flags);
+static void server_on_client_connect(server_context_t *S, int efd, int cfd) {
+    for (int i = 0; i < S->maxClients; ++i) {
+        if (!S->clientContext[i]->inUse) {
+            S->clientContext[i]->inUse = true;
+            S->clientContext[i]->clientFd = cfd;
+            S->clientContext[i]->contextData = S->handlers.onConnect(cfd);
 
-            // Enable TCP keepalives on the socket
-            int rc;
-            int enable = 1;
-            rc = setsockopt(clientFd_, SOL_SOCKET, SO_KEEPALIVE, &enable, sizeof(enable));
-            if (rc != 0) {
-                printf("Error enabling socket keepalives on client\n");
-            }
+            // non-blocking + keepalive
+            int flags = fcntl(cfd, F_GETFL, 0);
+            fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
 
-            // Set the timing parameters for dead "Idle" socket checks.
+            int ena = 1;
+            setsockopt(cfd, SOL_SOCKET, SO_KEEPALIVE, &ena, sizeof(ena));
 
-            // Check for dead idle connections on 10s of inactivity
             int idleTime = 10;
-            rc = setsockopt(clientFd_, SOL_TCP, TCP_KEEPIDLE, &idleTime, sizeof(idleTime));
-            if (rc != 0) {
-                printf("Error setting initial idle-time value\n");
-            }
+            setsockopt(cfd, SOL_TCP, TCP_KEEPIDLE, &idleTime, sizeof(idleTime));
 
-            // Set a maximum number of idle-socket heartbeat attemtps before assuming an idle socket it dead
             int keepCount = 5;
-            rc = setsockopt(clientFd_, SOL_TCP, TCP_KEEPCNT, &keepCount, sizeof(keepCount));
-            if (rc != 0) {
-                printf("Error setting idle retry count\n");
-            }
+            setsockopt(cfd, SOL_TCP, TCP_KEEPCNT, &keepCount, sizeof(keepCount));
 
-            // On performing the socket-idle check, send heartbeat attempts on a specified interval
             int keepInterval = 5;
-            rc = setsockopt(clientFd_, SOL_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(keepInterval));
-            if (rc != 0) {
-                printf("Error setting idle retry interval\n");
-            }
+            setsockopt(cfd, SOL_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(keepInterval));
 
-            break;
-        }
-    }
-
-    if (noRoom) {
-        close(clientFd_);
-        printf("can't accept socket - too many clients connected\n");
-        return;
-    }
-
-    server_register_client_fd(ePollFd_, clientFd_);
-}
-
-//---------------------------------------------------------------------------
-static void server_on_client_disconnect(server_context_t *context_, int ePollFd_, int index_) {
-    context_->handlers.onDisconnect(context_->clientContext[index_]->contextData);
-    server_deregister_client_fd(ePollFd_, context_->clientContext[index_]->clientFd);
-    close(context_->clientContext[index_]->clientFd);
-    context_->clientContext[index_]->clientFd = -1;
-    context_->clientContext[index_]->inUse = false;
-}
-
-//---------------------------------------------------------------------------
-void server_run(server_context_t *context_) {
-    int ePollFd = epoll_create1(0);
-
-    server_register_client_fd(ePollFd, context_->serverFd);
-
-    while (1) {
-        struct epoll_event ev;
-        int nfds = epoll_wait(ePollFd, &ev, 1, -1);
-        if (nfds < 0) {
-            printf("error on epoll_wait() = %d (%s)\n", errno, strerror(errno));
+            epoll_add(efd, cfd);
             return;
         }
+    }
+    // no slot free
+    close(cfd);
+    fprintf(stderr, "refused connection: server full\n");
+}
 
-        // Handle incoming connections on the registered socket.
-        if (ev.data.fd == context_->serverFd) {
-            struct sockaddr_in addr;
-            socklen_t socklen = sizeof(addr);
-            int clientFd = accept(context_->serverFd, (struct sockaddr *)(&addr), &socklen);
-            if (clientFd < 0) {
-                printf("error accepting socket %d (%s)\n", errno, strerror(errno));
-                return;
+//---------------------------------------------------------------------------
+// On client disconnect
+//---------------------------------------------------------------------------
+
+static void server_on_client_disconnect(server_context_t *S, int efd, int idx) {
+    S->handlers.onDisconnect(S->clientContext[idx]->contextData);
+    epoll_del(efd, S->clientContext[idx]->clientFd);
+    close(S->clientContext[idx]->clientFd);
+    S->clientContext[idx]->inUse = false;
+    S->clientContext[idx]->clientFd = -1;
+}
+
+//---------------------------------------------------------------------------
+// Main loop
+//---------------------------------------------------------------------------
+
+void server_run(server_context_t *S) {
+    int efd = epoll_create1(0);
+    epoll_add(efd, S->serverFd);
+
+    while (true) {
+        struct epoll_event ev;
+        int n = epoll_wait(efd, &ev, 1, -1);
+        if (n < 0) {
+            fprintf(stderr, "epoll_wait: %s\n", strerror(errno));
+            break;
+        }
+
+        if (ev.data.fd == S->serverFd) {
+            struct sockaddr_in peer;
+            socklen_t plen = sizeof(peer);
+            int cfd = accept(S->serverFd, (struct sockaddr *)&peer, &plen);
+            if (cfd < 0) {
+                fprintf(stderr, "accept: %s\n", strerror(errno));
+                break;
             }
-            server_on_client_connect(context_, ePollFd, clientFd);
+            server_on_client_connect(S, efd, cfd);
         } else {
-            // Handle all other events...
-            for (int i = 0; i < context_->maxClients; i++) {
-                if (context_->clientContext[i]->clientFd == ev.data.fd) {
-                    bool error = false;
-                    if ((ev.events & EPOLLHUP) || (ev.events & EPOLLERR) || (ev.events & EPOLLRDHUP)) {
-                        error = true;
+            for (int i = 0; i < S->maxClients; ++i) {
+                if (S->clientContext[i]->clientFd == ev.data.fd) {
+                    bool err = false;
+                    if (ev.events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {
+                        err = true;
                     } else if (ev.events & EPOLLIN) {
-                        if (!context_->handlers.onReadData(ev.data.fd, context_->clientContext[i]->contextData)) {
-                            error = true;
+                        if (!S->handlers.onReadData(ev.data.fd, S->clientContext[i]->contextData)) {
+                            err = true;
                         }
                     }
-
-                    if (error) {
-                        server_on_client_disconnect(context_, ePollFd, i);
+                    if (err) {
+                        server_on_client_disconnect(S, efd, i);
                     }
                     break;
                 }
